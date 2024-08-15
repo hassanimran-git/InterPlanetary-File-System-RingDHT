@@ -18,12 +18,14 @@ void displayMenu()
     cout << "8.Exit" << endl;
     cout << endl << "Press...." << endl;
 }
+
 int getUserChoice()
 {
     int choice = 0;
     cin >> choice;
     return choice;
 }
+
 int main()
 {   
     cout << "--------------------------------------Welcome to InterPlanetary System-------------------------------" << endl;
