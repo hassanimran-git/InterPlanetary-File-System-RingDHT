@@ -1,442 +1,653 @@
 #pragma once
 
 #include <iostream>
-#include "bigInt.h"
-#include <queue>
+#include <sstream>
 using namespace std;
 
-struct filePathKey {
-    string path;
-    bint key;
+struct Data;
+class Bnode;
+class Btree;
+
+struct Data
+{
+	string key;
+	string value;
+
+	Data(string k = "", string val = "")
+	{
+		key = k;
+		value = val;
+	}
+
+	Data(const Data &other) : key(other.key), value(other.value) {}
 };
 
-class BTreeNode {
+class Bnode
+{
 public:
-    filePathKey* keys;
-    int degree;
-    BTreeNode** children;
-    int numKeys;
-    bool isLeaf;
+	Data **Bkey;
+	Bnode **children;
+	int num_keys;
+	bool leaf;
+	int order;
 
-    BTreeNode(int _degree, bool _isLeaf);
-    void traverse();
+	Bnode(int ORDER, bool isleaf = false)
+	{
+		num_keys = 0;
+		leaf = isleaf;
+		order = ORDER;
+		Bkey = new Data *[order - 1];
+		children = new Bnode *[order];
 
-    int findKey(filePathKey key);
-    void insertNonFull(filePathKey key);
-    void splitChild(int i, BTreeNode* child);
-    void deletion(filePathKey key);
-    void removeFromLeaf(int index);
-    void removeFromNonLeaf(int index);
-    filePathKey getPredecessor(int index);
-    filePathKey getSuccessor(int index);
-    void fill(int index);
-    void borrowFromPrev(int index);
-    void borrowFromNext(int index);
-    void merge(int index);
-    bool searchKey(filePathKey key);
-    friend class BTree;
+		for (int i = 0; i < order - 1; i++)
+		{
+			Bkey[i] = NULL;
+		}
+		for (int i = 0; i < order; i++)
+		{
+			children[i] = NULL;
+		}
+	}
+
+	void InserttoNode(Data *new Data)
+	{
+		int i = num_keys - 1;
+
+		// find the appropriate position for the new key
+		while (i >= 0 && Bkey[i] != NULL && new Data->key < Bkey[i]->key)
+		{
+			Bkey[i + 1] = Bkey[i];
+			i--;
+		}
+
+		// insert the new key at the correct position
+		Bkey[i + 1] = new Data;
+		num_keys++;
+	}
+
+	Data *RemoveFromNode(int index)
+	{
+		Data *delkey = Bkey[index];
+		Bkey[index] = NULL;
+
+		// readjusting keys
+		for (int i = index; i < num_keys - 1; i++)
+		{
+			Bkey[i] = Bkey[i + 1];
+			Bkey[i + 1] = NULL;
+		}
+
+		// readjusting children
+		for (int i = index + 1; i < num_keys; i++)
+		{
+			children[i] = children[i + 1];
+			children[i + 1] = NULL;
+		}
+
+		num_keys--;
+
+		return delkey;
+	}
+
+	void splitChild(int i, Bnode *y, int splitIndex)
+	{
+		Bnode *z = new Bnode(y->order, y->leaf);
+		bool special_case = false; // special case is where the new entry lies directly between split and split+1
+
+		// Copy the keys from y to z
+		for (int j = 1; (splitIndex + j) < y->num_keys; j++)
+		{
+			z->InserttoNode(y->Bkey[splitIndex + j]);
+		}
+
+		// if y is an internal node, copy its children as well
+		if (!y->leaf)
+		{
+			for (int j = 1; j < y->order; j++)
+				z->children[j - 1] = y->children[splitIndex + j];
+		}
+
+		// making space for the new key in the current node
+		for (int j = num_keys - 1; j >= i; j--)
+			Bkey[j + 1] = Bkey[j];
+
+		// insert the middle key of y into the current node
+		Bkey[i] = y->Bkey[splitIndex];
+
+		// removing the moved keys from y
+		for (int j = y->num_keys - 1; j >= splitIndex; j--)
+		{
+			y->RemoveFromNode(j);
+		}
+
+		// make space for the new child pointer in the current node
+		for (int j = num_keys; j >= i + 1; j--)
+			children[j + 1] = children[j];
+
+		children[i + 1] = z;
+
+		num_keys = num_keys + 1;
+	}
+
+	void insertNonFull(Bnode *x, Data *new Data)
+	{
+		int i = x->num_keys - 1;
+
+		if (x->leaf)
+		{ // insertion point found (assuming that the splitting has been dealt with)
+			x->InserttoNode(new Data);
+		}
+		else
+		{ // continue traversal and split where necessary
+			while (i >= 0 && new Data->key < x->Bkey[i]->key)
+			{
+				i--;
+			}
+			i += 1; // i now contains the index for the child to continue traversal
+			if (x->children[i]->num_keys == x->order - 1)
+			{ // checking if child is full
+				int splitIndex = 0;
+				int newI = -1;
+				if (order % 2 == 0)
+				{ // if order is even then splitindex is the default middle
+					splitIndex = (order / 2) - 1;
+				}
+				else
+				{ // if order is odd, then the splitIndex needs to be calculated depending on the new entry
+					splitIndex = (order / 2) - 1;
+
+					if ((new Data->key > x->children[i]->Bkey[splitIndex]->key))
+					{
+						splitIndex += 1;
+						if (!(new Data->key < x->children[i]->Bkey[splitIndex + 1]->key))
+						{ // special case check
+							newI = i + 1;
+						}
+					}
+				}
+
+				splitChild(i, x->children[i], splitIndex);
+				if (newI != -1)
+				{
+					i = newI;
+				}
+			}
+			x->children[i]->insertNonFull(x->children[i], new Data);
+		}
+	}
 };
 
-class BTree {
+class Btree
+{
 public:
-    BTreeNode* root;
-    int degree;
-    
-    BTree() {
-        degree = 3;
-    }
+	Bnode *root;
+	int tree_order;
 
-    BTree(int _degree) {
-        root = nullptr;
-        degree = _degree;
-    }
+	Btree(int Order)
+	{
+		root = NULL;
+		tree_order = Order;
+	}
 
-    void traverse() {
-        if (root != nullptr)
-            root->traverse();
-    }
+	void displayInOrder(Bnode *node, int level = 0)
+	{
+		if (node != nullptr)
+		{
+			for (int i = 0; i < node->num_keys; i++)
+			{
+				displayInOrder(node->children[i], level + 1);
+				cout << "Level " << level << ": " << node->Bkey[i]->key << endl;
+			}
+			displayInOrder(node->children[node->num_keys], level + 1);
+		}
+	}
 
-    void insertion(filePathKey key);
-    void deletion(filePathKey key);
-    bool searchKey(filePathKey key);
-    void printBTree();
+	bool duplication(string value)
+	{
+		for (int i = 0; i < value.length(); i++)
+		{
+			if (value[i] == '\n')
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool exist(string key, Bnode *node)
+	{
+		if (node != nullptr)
+		{
+			for (int i = 0; i < node->num_keys; i++)
+			{
+				if (node->Bkey[i]->key == key)
+				{
+					return true;
+				}
+				if (exist(key, node->children[i]))
+				{
+					return true;
+				}
+			}
+			if (exist(key, node->children[node->num_keys]))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	Data *search(string key, Bnode *node)
+	{
+		if (node != nullptr)
+		{
+			for (int i = 0; i < node->num_keys; i++)
+			{
+				if (node->Bkey[i]->key == key)
+				{
+					return node->Bkey[i];
+				}
+				search(key, node->children[i]);
+			}
+			search(key, node->children[node->num_keys]);
+		}
+	}
+
+	void insert(Data *new Data)
+	{
+		if (root == nullptr)
+		{
+			root = new Bnode(tree_order, true);
+			root->InserttoNode(new Data);
+		}
+		else if (exist(new Data->key, root))
+		{ // same key already exist(duplication)
+			Data *current = search(new Data->key, root);
+			stringstream ss;
+			ss << current->value << "\n"
+			   << new Data->value;
+			current->value = ss.str();
+		}
+		else if (root->num_keys == tree_order - 1)
+		{ // root is full
+			Bnode *new_root = new Bnode(tree_order);
+			new_root->children[0] = root;
+			root = new_root;
+
+			int splitIndex = 0;
+
+			if (root->order % 2 == 0)
+			{ // if order is even then splitindex is the default middle
+				splitIndex = (root->order / 2) - 1;
+			}
+			else
+			{ // if order is odd, then the splitIndex needs to be calculated depending on the new entry
+				splitIndex = (root->order / 2) - 1;
+
+				if (new Data->key > root->children[0]->Bkey[splitIndex]->key)
+				{
+					splitIndex += 1;
+				}
+			}
+
+			root->splitChild(0, root->children[0], splitIndex); // splitting the previous root
+			root->insertNonFull(root, new Data);
+		}
+		else
+		{
+			root->insertNonFull(root, new Data);
+		}
+	}
+
+	void deleteKey(string k, Bnode *current)
+	{
+
+		if (duplication(search(k, root)->value))
+		{ // key to be deleted has duplicates
+			Data *del = search(k, root);
+			int choice = -1;
+			stringstream ss;
+
+			cout << del->value << endl
+				 << "Which of these do you want to delete?";
+			cin >> choice;
+			choice--;
+
+			for (int i = 0; i < del->value.length(); i++)
+			{
+				if (del->value[i] == '\n')
+				{
+					choice--;
+				}
+				if (choice == 0)
+				{
+					i++;
+					for (; i < del->value.length(); i++)
+					{
+						if (del->value[i] == '\n')
+						{
+							ss << del->value[i];
+							break;
+						}
+					}
+					choice = -1;
+				}
+				ss << del->value[i];
+			}
+			return;
+		}
+
+		int t = (current->order + 1) / 2;
+		int i = 0;
+
+		// Find the appropriate position for the key
+		while (i < current->num_keys && k > current->Bkey[i]->key)
+		{
+			i++;
+		}
+
+		if (current->leaf)
+		{
+			// If the key is in current node and it's a leaf, remove it
+			if (i < current->num_keys && current->Bkey[i]->key == k)
+			{
+				if (current == root && i == 0)
+				{
+					root = NULL;
+				}
+				delete current->Bkey[i];
+				current->RemoveFromNode(i);
+				if (current->Bkey[0] == NULL)
+				{
+					delete current;
+					current = NULL;
+				}
+			}
+			return;
+		}
+
+		if (i < current->num_keys && current->Bkey[i]->key == k)
+		{
+			// if the key is in current node but it's not a leaf, call delete_internal_node
+			delete_internal_node(current, k, i);
+		}
+		else if (current->children[i]->num_keys >= t)
+		{
+			// if the child node at index i has enough keys, recursively call delete
+			deleteKey(k, current->children[i]);
+		}
+		else
+		{
+			// cases where the child node needs adjustment
+			if (i != 0 && i + 2 < current->order)
+			{
+				if (current->children[i - 1]->num_keys >= t)
+				{
+					delete_sibling(current, i, i - 1);
+				}
+				else if (current->children[i + 1] != NULL && current->children[i + 1]->num_keys >= t)
+				{
+					delete_sibling(current, i, i + 1);
+				}
+				else
+				{
+					int merge_index = i + 1;
+					if (current->children[i + 1] == NULL)
+					{
+						merge_index = i - 1;
+					}
+
+					delete_merge(current, i, merge_index);
+					if (merge_index == i - 1)
+					{
+						i = i - 1; // trying
+					}
+				}
+			}
+			else if (i == 0)
+			{
+				if (current->children[i + 1]->num_keys >= t)
+				{
+					delete_sibling(current, i, i + 1);
+				}
+				else
+				{
+					delete_merge(current, i, i + 1);
+				}
+			}
+			else if (i + 2 == current->order)
+			{
+				if (current->children[i - 1]->num_keys >= t)
+				{
+					delete_sibling(current, i, i - 1);
+				}
+				else
+				{
+					delete_merge(current, i, i - 1);
+					i = i - 1;
+				}
+			}
+
+			// continue the deletion recursively
+			if (current->children[i] != NULL)
+			{
+				deleteKey(k, current->children[i]);
+			}
+		}
+	}
+	void delete_internal_node(Bnode *x, string k, int i)
+	{
+		int t = (x->order + 1) / 2;
+
+		if (x->leaf)
+		{
+			// if x is a leaf and contains the key, remove it
+			if (x->Bkey[i]->key == k)
+			{
+				delete x->Bkey[i];
+				x->RemoveFromNode(i);
+			}
+			return;
+		}
+
+		if (x->children[i]->num_keys >= t)
+		{
+			// if x is not a leaf and contains the key, call delete_predecessor
+			x->Bkey[i] = delete_predecessor(x->children[i]);
+			return;
+		}
+		else if (x->children[i + 1]->num_keys >= t)
+		{
+			// if the right sibling has enough keys, replace the key with the successor
+			x->Bkey[i] = delete_successor(x->children[i + 1]);
+			return;
+		}
+		else
+		{
+			// merge the current node and its right sibling
+			delete_merge(x, i, i + 1);
+
+			// continue the deletion recursively
+			delete_internal_node(x->children[i], k, t - 1);
+			if (x->Bkey[0] == NULL)
+			{
+				delete x;
+				x = NULL;
+			}
+		}
+	}
+
+	Data *delete_predecessor(Bnode *current)
+	{
+		if (current->leaf)
+		{
+			// if the node is a leaf, remove and return the last key
+			Data *deletedKey = current->RemoveFromNode(current->num_keys - 1);
+			return deletedKey;
+		}
+
+		int n = current->num_keys - 1;
+		int t = (current->order - 1) / 2;
+
+		if (current->children[n]->num_keys >= t)
+		{
+			// if the last child has enough keys, call delete_sibling
+			delete_sibling(current, n + 1, n);
+		}
+		else
+		{
+			// if not, merge the last child and its sibling
+			delete_merge(current, n, n + 1);
+		}
+
+		// continue the deletion recursively
+		return delete_predecessor(current->children[n]);
+	}
+
+	Data *delete_successor(Bnode *current)
+	{
+		if (current->leaf)
+		{
+			// if the node is a leaf, remove and return the first key
+			Data *deletedKey = current->Bkey[0];
+			current->RemoveFromNode(0);
+			return deletedKey;
+		}
+		int t = (current->order - 1) / 2;
+		if (current->children[1]->num_keys >= t)
+		{
+			// if the second child has enough keys, call delete_sibling
+			delete_sibling(current, 0, 1);
+		}
+		else
+		{
+			// if not, merge the first child and its sibling
+			delete_merge(current, 0, 1);
+		}
+
+		// continue the deletion recursively
+		return delete_successor(current->children[0]);
+	}
+
+	void delete_merge(Bnode *x, int i, int j)
+	{
+		Bnode *cnode = x->children[i];
+
+		if (j > i)
+		{
+			Bnode *rsnode = x->children[j];
+
+			// move the key from the current node to the left child
+			cnode->Bkey[cnode->num_keys] = x->Bkey[i];
+			cnode->num_keys++;
+
+			// copy keys and children from the right sibling to the left child
+			for (int k = 0; k < rsnode->num_keys; k++)
+			{
+				cnode->Bkey[cnode->num_keys] = rsnode->Bkey[k];
+				cnode->num_keys++;
+
+				cnode->children[cnode->num_keys - 1] = rsnode->children[k];
+			}
+			cnode->children[cnode->num_keys] = rsnode->children[rsnode->num_keys];
+
+			x->RemoveFromNode(i);
+
+			// delet the right sibling
+			x->children[i + 1] = nullptr;
+			delete rsnode;
+		}
+		else
+		{
+			Bnode *lsnode = x->children[j];
+
+			// move the key from the parent node to the left child
+			lsnode->Bkey[lsnode->num_keys] = x->Bkey[j];
+			lsnode->num_keys++;
+
+			// copy keys and children from the left sibling to the right child
+			for (int k = 0; k < cnode->num_keys; k++)
+			{
+				lsnode->Bkey[lsnode->num_keys] = cnode->Bkey[k];
+				lsnode->num_keys++;
+
+				lsnode->children[lsnode->num_keys - 1] = cnode->children[k];
+			}
+
+			lsnode->children[lsnode->num_keys] = cnode->children[cnode->num_keys];
+
+			x->RemoveFromNode(j);
+
+			// delete the left child
+			x->children[i] = nullptr;
+			delete cnode;
+		}
+
+		// if x is the root and has no keys left, update the root
+
+		if (x == root && x->num_keys == 0)
+		{
+			root = (j > i) ? x->children[i] : x->children[j];
+		}
+	}
+	void delete_sibling(Bnode *x, int i, int j)
+	{
+		Bnode *cnode = x->children[i];
+
+		if (i < j)
+		{
+			Bnode *rsnode = x->children[j]; // current sibling is i, other sibling is j
+
+			cnode->InserttoNode(x->Bkey[0]); // first key of x
+
+			x->Bkey[0] = rsnode->RemoveFromNode(0);
+		}
+		else
+		{
+			Bnode *lsnode = x->children[j];
+
+			cnode->InserttoNode(x->Bkey[x->num_keys - 1]); // last key of x
+
+			x->Bkey[x->num_keys - 1] = lsnode->RemoveFromNode(lsnode->num_keys - 1);
+		}
+	}
+
+	void deleteTree(Bnode *node)
+	{
+		if (node)
+		{
+			// Delete children recursively
+			for (int i = 0; i <= node->num_keys; i++)
+			{
+				deleteTree(node->children[i]);
+			}
+
+			// Delete keys and set them to NULL
+			for (int i = 0; i < node->num_keys; i++)
+			{
+				delete node->Bkey[i];
+				node->Bkey[i] = nullptr;
+			}
+
+			// Delete the node
+			delete node;
+		}
+	}
+
+	void deleteEntireTree()
+	{
+		deleteTree(root);
+		root = nullptr;
+	}
+
+	Data smallest()
+	{
+		Bnode *current = root;
+		while (current->children[0] != NULL)
+		{
+			current = current->children[0];
+		}
+
+		return *current->Bkey[0];
+	}
 };
-
-// B tree node
-BTreeNode::BTreeNode(int degree, bool isLeaf) {
-    this->degree = degree;
-    this->isLeaf = isLeaf;
-
-    keys = new filePathKey[2 * degree - 1];
-    children = new BTreeNode * [2 * degree];
-
-    numKeys = 0;
-}
-
-// Find the key
-int BTreeNode::findKey(filePathKey toFind) {
-    int index = 0;
-    while (index < numKeys && keys[index].key < toFind.key)
-        ++index;
-    return index;
-}
-
-// Deletion operation
-void BTreeNode::deletion(filePathKey key) {
-    int index = findKey(key);
-
-    if (index < numKeys && keys[index].key == key.key) {
-        if (isLeaf)
-            removeFromLeaf(index);
-        else
-            removeFromNonLeaf(index);
-    }
-    else {
-        if (isLeaf) {
-            cout << "The key " << key.key << " does not exist in the tree\n";
-            return;
-        }
-
-        bool flag = ((index == numKeys) ? true : false);
-
-        if (children[index]->numKeys < degree)
-            fill(index);
-
-        if (flag && index > numKeys)
-            children[index - 1]->deletion(key);
-        else
-            children[index]->deletion(key);
-    }
-    return;
-}
-
-// Remove from the leaf
-void BTreeNode::removeFromLeaf(int index) {
-    for (int i = index + 1; i < numKeys; ++i)
-        keys[i - 1] = keys[i];
-
-    numKeys--;
-
-    return;
-}
-
-// Delete from non-leaf node
-void BTreeNode::removeFromNonLeaf(int index) {
-    filePathKey key = keys[index];
-
-    if (children[index]->numKeys >= degree) {
-        filePathKey pred = getPredecessor(index);
-        keys[index] = pred;
-        children[index]->deletion(pred);
-    }
-
-    else if (children[index + 1]->numKeys >= degree) {
-        filePathKey succ = getSuccessor(index);
-        keys[index] = succ;
-        children[index + 1]->deletion(succ);
-    }
-
-    else {
-        merge(index);
-        children[index]->deletion(key);
-    }
-    return;
-}
-
-filePathKey BTreeNode::getPredecessor(int index) {
-    BTreeNode* current = children[index];
-    while (!current->isLeaf)
-        current = current->children[current->numKeys];
-
-    return current->keys[current->numKeys - 1];
-}
-
-filePathKey BTreeNode::getSuccessor(int index) {
-    BTreeNode* current = children[index + 1];
-    while (!current->isLeaf)
-        current = current->children[0];
-
-    return current->keys[0];
-}
-
-void BTreeNode::fill(int index) {
-    if (index != 0 && children[index - 1]->numKeys >= degree)
-        borrowFromPrev(index);
-
-    else if (index != numKeys && children[index + 1]->numKeys >= degree)
-        borrowFromNext(index);
-
-    else {
-        if (index != numKeys)
-            merge(index);
-        else
-            merge(index - 1);
-    }
-
-    return;
-}
-
-// Borrow from previous
-void BTreeNode::borrowFromPrev(int index) {
-    BTreeNode* child = children[index];
-    BTreeNode* sibling = children[index - 1];
-
-    for (int i = child->numKeys - 1; i >= 0; --i)
-        child->keys[i + 1] = child->keys[i];
-
-    if (!child->isLeaf) {
-        for (int i = child->numKeys; i >= 0; --i)
-            child->children[i + 1] = child->children[i];
-    }
-
-    child->keys[0] = keys[index - 1];
-
-    if (!child->isLeaf)
-
-        child->children[0] = sibling->children[sibling->numKeys];
-
-    keys[index - 1] = sibling->keys[sibling->numKeys - 1];
-
-    child->numKeys += 1;
-    sibling->numKeys -= 1;
-
-    return;
-}
-
-// Borrow from the next
-void BTreeNode::borrowFromNext(int index) {
-    BTreeNode* child = children[index];
-    BTreeNode* sibling = children[index + 1];
-
-    child->keys[(child->numKeys)] = keys[index];
-
-    if (!(child->isLeaf))
-        child->children[(child->numKeys) + 1] = sibling->children[0];
-
-    keys[index] = sibling->keys[0];
-
-    for (int i = 1; i < sibling->numKeys; ++i)
-        sibling->keys[i - 1] = sibling->keys[i];
-
-    if (!sibling->isLeaf) {
-        for (int i = 1; i <= sibling->numKeys; ++i)
-            sibling->children[i - 1] = sibling->children[i];
-    }
-
-    child->numKeys += 1;
-    sibling->numKeys -= 1;
-
-    return;
-}
-
-// Merge
-void BTreeNode::merge(int index) {
-    BTreeNode* child = children[index];
-    BTreeNode* sibling = children[index + 1];
-
-    child->keys[degree - 1] = keys[index];
-
-    for (int i = 0; i < sibling->numKeys; ++i)
-        child->keys[i + degree] = sibling->keys[i];
-
-    if (!child->isLeaf) {
-        for (int i = 0; i <= sibling->numKeys; ++i)
-            child->children[i + degree] = sibling->children[i];
-    }
-
-    for (int i = index + 1; i < numKeys; ++i)
-        keys[i - 1] = keys[i];
-
-    for (int i = index + 2; i <= numKeys; ++i)
-        children[i - 1] = children[i];
-
-    child->numKeys += sibling->numKeys + 1;
-    numKeys--;
-
-    delete (sibling);
-    return;
-}
-
-void BTree::insertion(filePathKey key) {
-    if (root == nullptr) {
-        root = new BTreeNode(degree, true);
-        root->keys[0] = key;
-        root->numKeys = 1;
-    }
-    else {
-        if (root->numKeys == 2 * degree - 1) {
-            BTreeNode* newRoot = new BTreeNode(degree, false);
-
-            newRoot->children[0] = root;
-
-            newRoot->splitChild(0, root);
-
-            int i = 0;
-            if (newRoot->keys[0].key < key.key)
-                i++;
-            newRoot->children[i]->insertNonFull(key);
-
-            root = newRoot;
-        }
-        else
-            root->insertNonFull(key);
-    }
-}
-
-void BTreeNode::insertNonFull(filePathKey key) {
-    int i = numKeys - 1;
-
-    if (isLeaf) {
-        while (i >= 0 && keys[i].key > key.key) {
-            keys[i + 1] = keys[i];
-            i--;
-        }
-
-        keys[i + 1] = key;
-        numKeys = numKeys + 1;
-    }
-    else {
-        while (i >= 0 && keys[i].key > key.key)
-            i--;
-
-        if (children[i + 1]->numKeys == 2 * degree - 1) {
-            splitChild(i + 1, children[i + 1]);
-
-            if (keys[i + 1].key < key.key)
-                i++;
-        }
-        children[i + 1]->insertNonFull(key);
-    }
-}
-
-// Split child
-void BTreeNode::splitChild(int i, BTreeNode* y) {
-    BTreeNode* z = new BTreeNode(y->degree, y->isLeaf);
-    z->numKeys = degree - 1;
-
-    for (int j = 0; j < degree - 1; j++)
-        z->keys[j] = y->keys[j + degree];
-
-    if (y->isLeaf == false) {
-        for (int j = 0; j < degree; j++)
-            z->children[j] = y->children[j + degree];
-    }
-
-    y->numKeys = degree - 1;
-
-    for (int j = numKeys; j >= i + 1; j--)
-        children[j + 1] = children[j];
-
-    children[i + 1] = z;
-
-    for (int j = numKeys - 1; j >= i; j--)
-        keys[j + 1] = keys[j];
-
-    keys[i] = y->keys[degree - 1];
-
-    numKeys = numKeys + 1;
-}
-
-// Traverse
-void BTreeNode::traverse() {
-    int i;
-    cout << endl;
-    for (i = 0; i < numKeys; i++) {
-        if (!isLeaf)
-            children[i]->traverse();
-        cout << " " << keys[i].key;
-    }
-
-    if (!isLeaf)
-        children[i]->traverse();
-}
-
-// Delete Operation
-void BTree::deletion(filePathKey key) {
-    if (!root) {
-        cout << "The tree is empty\n";
-        return;
-    }
-
-    root->deletion(key);
-
-    if (root->numKeys == 0) {
-        BTreeNode* tmp = root;
-        if (root->isLeaf)
-            root = nullptr;
-        else
-            root = root->children[0];
-
-        delete tmp;
-    }
-    return;
-}
-
-bool BTree::searchKey(filePathKey key) {
-    if (!root) {
-        return false;  // The tree is empty, key cannot be present.
-    }
-
-    // Call the searchKey function starting from the root.
-    return root->searchKey(key);
-}
-
-bool BTreeNode::searchKey(filePathKey key) {
-    int index = 0;
-    while (index < numKeys && keys[index].key < key.key)
-        ++index;
-
-    // If the key is found in the current node, return true.
-    if (index < numKeys && keys[index].key == key.key && keys[index].path == key.path)
-        return true;
-
-    // If the node is a leaf, and the key is not found, return false.
-    if (isLeaf)
-        return false;
-
-    // Recursively search in the appropriate child node.
-    return children[index]->searchKey(key);
-}
-
-void BTree::printBTree() {
-    cout << endl;
-    if (!root) {
-        cout << "The tree is empty\n";
-        return;
-    }
-
-    queue<BTreeNode*> q;
-    q.push(root);
-
-    // Level-order traversal
-    while (!q.empty()) {
-        int nodesAtCurrentLevel = q.size();
-
-        // Process each node at the current level
-        for (int i = 0; i < nodesAtCurrentLevel; ++i) {
-            // Dequeue the front node
-            BTreeNode* current = q.front();
-            q.pop();
-
-            // Print the keys of the current node
-
-            cout << "(";
-            for (int j = 0; j < current->numKeys - 1; ++j)
-                cout << current->keys[j].key << ",";
-            cout << current->keys[current->numKeys - 1].key;
-            cout << ")";
-
-            // Enqueue children if the current node is not a leaf
-            if (!current->isLeaf) {
-                for (int j = 0; j <= current->numKeys; ++j) {
-                    if (current->children[j])
-                        q.push(current->children[j]);
-                }
-            }
-
-            // Separate nodes at the same level
-            cout << "    ";
-        }
-        cout << endl;  // Move to the next level
-    }
-}
